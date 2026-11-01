@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -7,113 +7,218 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  useColorScheme,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AnalysisOverview } from "@/components/nutrition/AnalysisOverview";
 import { FoodAnalysisList } from "@/components/nutrition/FoodAnalysisList";
-import { BottomTabInset, Colors, MaxContentWidth } from "@/constants/theme";
+import { ScreenHeader } from "@/components/screen-header";
+import { BottomTabInset, MaxContentWidth } from "@/constants/theme";
 import { analyzeFood } from "@/features/nutrition/api";
 import {
   pickFoodPhoto,
   takeFoodPhoto,
 } from "@/features/nutrition/image-picker";
-import type { NutritionAnalysis, NutritionImage } from "@/features/nutrition/types";
+import { persistImage } from "@/features/nutrition/prepare-image";
+import {
+  createAnalysisId,
+  deleteAnalysis,
+  getAnalysis,
+  saveAnalysis,
+} from "@/features/nutrition/storage";
+import type {
+  NutritionImage,
+  SavedAnalysis,
+} from "@/features/nutrition/types";
+import { useUserSettings } from "@/features/profile/use-user-settings";
+import { useAppColors } from "@/hooks/use-app-colors";
+
+type Params = {
+  id?: string;
+  imageUri?: string;
+  imageName?: string;
+  imageType?: string;
+  requestId?: string;
+};
+
+type NavJob =
+  | { kind: "open"; requestId: string; id: string }
+  | { kind: "analyze"; requestId: string; image: NutritionImage };
+
+type ScreenState = {
+  current: SavedAnalysis | null;
+  previewUri: string | null;
+  busy: boolean;
+};
+
+const IDLE: ScreenState = { current: null, previewUri: null, busy: false };
+
+const first = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value;
+
+/**
+ * Peticiones ya atendidas en esta sesión. Vive fuera del componente para que
+ * un remontaje de la pestaña no vuelva a analizar (y guardar) la misma foto.
+ */
+const handledRequests = new Set<string>();
+
+function showAnalysisError(error: unknown) {
+  Alert.alert(
+    "No se pudo analizar el plato",
+    error instanceof Error ? error.message : "Inténtalo de nuevo en unos segundos.",
+  );
+}
+
+async function analyzeAndSave(
+  image: NutritionImage,
+  signal: AbortSignal,
+): Promise<SavedAnalysis> {
+  const analysis = await analyzeFood(image, { signal });
+  const id = createAnalysisId();
+  const storedUri = await persistImage(image.uri, id);
+  return saveAnalysis({ id, analysis, imageUri: storedUri });
+}
 
 export default function AnalysisScreen() {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === "dark" ? "dark" : "light"];
+  const colors = useAppColors();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{
-    imageUri?: string;
-    imageName?: string;
-    imageType?: string;
-  }>();
+  const { settings } = useUserSettings();
+  const params = useLocalSearchParams<Params>();
 
-  const uri = Array.isArray(params.imageUri) ? params.imageUri[0] : params.imageUri;
-  const fileName = Array.isArray(params.imageName) ? params.imageName[0] : params.imageName;
-  const mimeType = Array.isArray(params.imageType) ? params.imageType[0] : params.imageType;
+  const savedId = first(params.id);
+  const imageUri = first(params.imageUri);
+  const imageName = first(params.imageName);
+  const imageType = first(params.imageType);
+  const requestId = first(params.requestId);
 
-  const [activeImageUri, setActiveImageUri] = useState<string | undefined>(uri);
-  const [analysis, setAnalysis] = useState<NutritionAnalysis | null>(null);
-  const [isLoading, setIsLoading] = useState(Boolean(uri));
-
-  const handleAnalyze = async (image: NutritionImage) => {
-    setActiveImageUri(image.uri);
-    setIsLoading(true);
-    setAnalysis(null);
-    try {
-      const result = await analyzeFood(image);
-      setAnalysis(result);
-    } catch (error: unknown) {
-      Alert.alert(
-        "No se pudo analizar el plato",
-        error instanceof Error
-          ? error.message
-          : "Inténtalo de nuevo en unos segundos.",
-      );
-    } finally {
-      setIsLoading(false);
+  // Cada navegación a esta pestaña trae un `requestId` nuevo: o bien abre un
+  // análisis guardado (`id`) o bien lanza uno nuevo (`imageUri`).
+  const navJob = useMemo<NavJob | null>(() => {
+    if (!requestId) return null;
+    if (savedId) return { kind: "open", requestId, id: savedId };
+    if (imageUri) {
+      return {
+        kind: "analyze",
+        requestId,
+        image: { uri: imageUri, fileName: imageName, mimeType: imageType },
+      };
     }
-  };
+    return null;
+  }, [imageName, imageType, imageUri, requestId, savedId]);
+
+  const [state, setState] = useState<ScreenState>(IDLE);
+  const [settledRequestId, setSettledRequestId] = useState<string>();
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!uri) return;
-    let isMounted = true;
+    if (!navJob || handledRequests.has(navJob.requestId)) return;
+    handledRequests.add(navJob.requestId);
 
-    analyzeFood({ uri, fileName, mimeType })
-      .then((result) => {
-        if (isMounted) setAnalysis(result);
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const task: Promise<SavedAnalysis | null> =
+      navJob.kind === "open"
+        ? getAnalysis(navJob.id)
+        : analyzeAndSave(navJob.image, controller.signal);
+
+    task
+      .then((saved) => {
+        if (controller.signal.aborted) return;
+        if (!saved) {
+          Alert.alert("Análisis no encontrado", "Puede que lo hayas borrado.");
+        }
+        setState({
+          current: saved,
+          previewUri: saved?.imageUri ?? null,
+          busy: false,
+        });
       })
       .catch((error: unknown) => {
-        if (isMounted) {
-          Alert.alert(
-            "No se pudo analizar el plato",
-            error instanceof Error
-              ? error.message
-              : "Inténtalo de nuevo en unos segundos.",
-          );
-        }
+        if (controller.signal.aborted) return;
+        showAnalysisError(error);
+        setState({
+          current: null,
+          previewUri: navJob.kind === "analyze" ? navJob.image.uri : null,
+          busy: false,
+        });
       })
       .finally(() => {
-        if (isMounted) setIsLoading(false);
+        if (!controller.signal.aborted) setSettledRequestId(navJob.requestId);
+        if (abortRef.current === controller) abortRef.current = null;
       });
+  }, [navJob]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [fileName, mimeType, uri]);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
-  const handleCamera = async () => {
+  const runLocal = async (image: NutritionImage) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setState({ current: null, previewUri: image.uri, busy: true });
     try {
-      const img = await takeFoodPhoto();
-      if (img) handleAnalyze(img);
-    } catch {
-      Alert.alert("Error", "No se pudo acceder a la cámara.");
+      const saved = await analyzeAndSave(image, controller.signal);
+      if (controller.signal.aborted) return;
+      setState({ current: saved, previewUri: saved.imageUri, busy: false });
+    } catch (error: unknown) {
+      if (controller.signal.aborted) return;
+      showAnalysisError(error);
+      setState((previous) => ({ ...previous, busy: false }));
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
     }
   };
 
-  const handleGallery = async () => {
+  const pick = async (
+    picker: () => Promise<NutritionImage | null>,
+    errorMessage: string,
+  ) => {
     try {
-      const img = await pickFoodPhoto();
-      if (img) handleAnalyze(img);
+      const image = await picker();
+      if (image) await runLocal(image);
     } catch {
-      Alert.alert("Error", "No se pudo acceder a la galería.");
+      Alert.alert("Error", errorMessage);
     }
   };
 
-  const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace("/");
-    }
+  const handleCamera = () => pick(takeFoodPhoto, "No se pudo acceder a la cámara.");
+  const handleGallery = () =>
+    pick(pickFoodPhoto, "No se pudo acceder a la galería.");
+
+  const navPending = navJob !== null && settledRequestId !== navJob.requestId;
+  const isLoading = state.busy || navPending;
+  const current = navPending ? null : state.current;
+  const previewUri =
+    navPending && navJob?.kind === "analyze"
+      ? navJob.image.uri
+      : state.previewUri;
+
+  const handleDelete = () => {
+    if (!current) return;
+    Alert.alert(
+      "Eliminar análisis",
+      "Se quitará del historial y del resumen diario.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: async () => {
+            await deleteAnalysis(current.id);
+            setState(IDLE);
+            router.replace("/");
+          },
+        },
+      ],
+    );
   };
 
+  const analysis = current?.analysis;
   const totals = analysis?.totals;
-  const hasAnalysis = Boolean(analysis && analysis.foods.length > 0);
+  const hasResult = current !== null;
+  const showEmpty = !isLoading && !hasResult && !previewUri;
 
   return (
     <ScrollView
@@ -124,19 +229,7 @@ export default function AnalysisScreen() {
       showsVerticalScrollIndicator={false}
     >
       <View style={[styles.container, { maxWidth: MaxContentWidth }]}>
-        <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-          <Pressable
-            onPress={handleBack}
-            style={styles.back}
-            accessibilityLabel="Volver"
-          >
-            <Text style={styles.backText}>‹</Text>
-          </Pressable>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>
-            Análisis del plato
-          </Text>
-          <View style={styles.spacer} />
-        </View>
+        <ScreenHeader title="Análisis del plato" />
 
         {isLoading ? (
           <View
@@ -144,8 +237,9 @@ export default function AnalysisScreen() {
               styles.loadingCard,
               { backgroundColor: colors.backgroundElement },
             ]}
+            accessibilityLiveRegion="polite"
           >
-            <ActivityIndicator size="large" color="#1A9B6B" />
+            <ActivityIndicator size="large" color={colors.primary} />
             <Text style={[styles.loadingTitle, { color: colors.text }]}>
               Analizando tu plato con IA...
             </Text>
@@ -157,15 +251,19 @@ export default function AnalysisScreen() {
           </View>
         ) : null}
 
-        {!isLoading && !activeImageUri && !hasAnalysis ? (
+        {showEmpty ? (
           <View
             style={[
               styles.emptyCard,
               { backgroundColor: colors.backgroundElement },
             ]}
           >
-            <View style={styles.emptyIconCircle}>
-              <Text style={styles.emptyIconText}>🥗</Text>
+            <View
+              style={[styles.emptyIconCircle, { backgroundColor: colors.primarySoft }]}
+            >
+              <Text style={styles.emptyIconText} accessibilityElementsHidden>
+                🥗
+              </Text>
             </View>
             <Text style={[styles.emptyTitle, { color: colors.text }]}>
               Aún no has analizado ningún plato
@@ -180,33 +278,40 @@ export default function AnalysisScreen() {
               <Pressable
                 onPress={handleCamera}
                 style={({ pressed }) => [
-                  styles.ctaButtonPrimary,
+                  styles.ctaButton,
+                  { backgroundColor: colors.primary },
                   pressed && styles.pressed,
                 ]}
+                accessibilityRole="button"
               >
-                <Text style={styles.ctaButtonPrimaryText}>📷 Hacer foto</Text>
+                <Text style={[styles.ctaText, { color: colors.onPrimary }]}>
+                  Hacer foto
+                </Text>
               </Pressable>
               <Pressable
                 onPress={handleGallery}
                 style={({ pressed }) => [
-                  styles.ctaButtonSecondary,
+                  styles.ctaButton,
+                  { backgroundColor: colors.primarySoft },
                   pressed && styles.pressed,
                 ]}
+                accessibilityRole="button"
               >
-                <Text style={styles.ctaButtonSecondaryText}>
-                  🖼 Galería
+                <Text style={[styles.ctaText, { color: colors.onPrimarySoft }]}>
+                  Galería
                 </Text>
               </Pressable>
             </View>
           </View>
         ) : null}
 
-        {activeImageUri || hasAnalysis ? (
+        {!isLoading && hasResult && current ? (
           <>
             <AnalysisOverview
-              colors={colors}
-              imageUri={activeImageUri}
-              analysis={analysis ?? undefined}
+              imageUri={previewUri}
+              analysis={analysis}
+              analyzedAt={new Date(current.createdAt)}
+              dailyCalorieGoal={settings.dailyCalorieGoal}
             />
 
             <Text style={[styles.sectionTitle, { color: colors.text }]}>
@@ -221,17 +326,18 @@ export default function AnalysisScreen() {
               <NutritionStat
                 label="Proteínas"
                 value={`${Math.round(totals?.protein ?? 0)}g`}
-                color="#36C98F"
+                color={colors.protein}
               />
               <NutritionStat
                 label="Carbohidratos"
                 value={`${Math.round(totals?.carbohydrates ?? 0)}g`}
-                color="#F5B94C"
+                color={colors.carbs}
               />
               <NutritionStat
                 label="Grasas"
                 value={`${Math.round(totals?.fat ?? 0)}g`}
-                color="#F27D6B"
+                color={colors.fat}
+                last
               />
             </View>
 
@@ -239,25 +345,68 @@ export default function AnalysisScreen() {
               <Text style={[styles.sectionTitle, { color: colors.text }]}>
                 Alimentos detectados
               </Text>
-              <Text style={styles.count}>
+              <Text style={[styles.count, { color: colors.primary }]}>
                 {analysis?.foods.length ?? 0} elementos
               </Text>
             </View>
-            <FoodAnalysisList colors={colors} foods={analysis?.foods ?? []} />
+            <FoodAnalysisList foods={analysis?.foods ?? []} />
 
-            {hasAnalysis ? (
-              <View style={styles.insight}>
-                <Text style={styles.insightIcon}>!</Text>
+            {analysis && analysis.foods.length > 0 ? (
+              <View
+                style={[styles.insight, { backgroundColor: colors.warningBackground }]}
+              >
+                <Text
+                  style={[
+                    styles.insightIcon,
+                    {
+                      backgroundColor: colors.warningIconBackground,
+                      color: colors.warningText,
+                    },
+                  ]}
+                  accessibilityElementsHidden
+                >
+                  !
+                </Text>
                 <View style={styles.insightCopy}>
-                  <Text style={styles.insightTitle}>Recomendación del plato</Text>
-                  <Text style={styles.insightText}>
+                  <Text style={[styles.insightTitle, { color: colors.warningText }]}>
+                    Recomendación del plato
+                  </Text>
+                  <Text
+                    style={[styles.insightText, { color: colors.warningTextMuted }]}
+                  >
                     {totals && totals.protein > 20
-                      ? "Excelente aporte de proteína para la recuperación muscular y saciedad."
+                      ? "Buen aporte de proteína para la recuperación muscular y la saciedad."
                       : "Plato ligero. Considera añadir una fuente de proteína para equilibrar los macronutrientes."}
                   </Text>
                 </View>
               </View>
             ) : null}
+
+            <View style={styles.footerActions}>
+              <Pressable
+                onPress={handleCamera}
+                style={({ pressed }) => [
+                  styles.ctaButton,
+                  { backgroundColor: colors.primary },
+                  pressed && styles.pressed,
+                ]}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.ctaText, { color: colors.onPrimary }]}>
+                  Analizar otro plato
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleDelete}
+                style={({ pressed }) => [styles.deleteButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Eliminar este análisis del historial"
+              >
+                <Text style={[styles.deleteText, { color: colors.danger }]}>
+                  Eliminar del historial
+                </Text>
+              </Pressable>
+            </View>
           </>
         ) : null}
       </View>
@@ -269,16 +418,28 @@ function NutritionStat({
   label,
   value,
   color,
+  last,
 }: {
   label: string;
   value: string;
   color: string;
+  last?: boolean;
 }) {
+  const colors = useAppColors();
   return (
-    <View style={styles.stat}>
+    <View
+      style={[
+        styles.stat,
+        !last && { borderRightWidth: 1, borderRightColor: colors.border },
+      ]}
+      accessible
+      accessibilityLabel={`${label}: ${value}`}
+    >
       <View style={[styles.dot, { backgroundColor: color }]} />
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statValue}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+        {label}
+      </Text>
+      <Text style={[styles.statValue, { color: colors.text }]}>{value}</Text>
     </View>
   );
 }
@@ -286,23 +447,6 @@ function NutritionStat({
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   container: { width: "100%", alignSelf: "center", paddingHorizontal: 20 },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 20,
-  },
-  back: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#F0F8F4",
-  },
-  backText: { color: "#17211D", fontSize: 30, lineHeight: 30 },
-  spacer: { width: 40 },
-  headerTitle: { fontSize: 17, fontWeight: "800" },
   loadingCard: {
     borderRadius: 20,
     padding: 30,
@@ -333,7 +477,6 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
     borderRadius: 34,
-    backgroundColor: "#D7F4E8",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,
@@ -357,29 +500,14 @@ const styles = StyleSheet.create({
     gap: 12,
     width: "100%",
   },
-  ctaButtonPrimary: {
+  ctaButton: {
     flex: 1,
-    backgroundColor: "#1A9B6B",
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
   },
-  ctaButtonPrimaryText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  ctaButtonSecondary: {
-    flex: 1,
-    backgroundColor: "#E2F2EB",
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  ctaButtonSecondaryText: {
-    color: "#176547",
+  ctaText: {
     fontSize: 14,
     fontWeight: "700",
   },
@@ -392,14 +520,11 @@ const styles = StyleSheet.create({
   },
   stat: {
     flex: 1,
-    borderRightWidth: 1,
-    borderRightColor: "rgba(120, 140, 130, 0.16)",
     paddingLeft: 10,
   },
   dot: { width: 7, height: 7, borderRadius: 4, marginBottom: 9 },
-  statLabel: { color: "#81908A", fontSize: 10, lineHeight: 14 },
+  statLabel: { fontSize: 10, lineHeight: 14 },
   statValue: {
-    color: "#17211D",
     fontSize: 18,
     fontWeight: "800",
     marginTop: 5,
@@ -410,13 +535,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   count: {
-    color: "#1A9B6B",
     fontSize: 11,
     fontWeight: "700",
     marginBottom: 14,
   },
   insight: {
-    backgroundColor: "#FFF5D8",
     borderRadius: 18,
     padding: 16,
     flexDirection: "row",
@@ -426,15 +549,17 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: "#FFE8A2",
-    color: "#A66A00",
     fontSize: 20,
     fontWeight: "800",
     textAlign: "center",
     paddingTop: 6,
+    overflow: "hidden",
   },
   insightCopy: { flex: 1, marginLeft: 12 },
-  insightTitle: { color: "#6E4B00", fontSize: 13, fontWeight: "800" },
-  insightText: { color: "#856A2C", fontSize: 11, lineHeight: 16, marginTop: 4 },
+  insightTitle: { fontSize: 13, fontWeight: "800" },
+  insightText: { fontSize: 11, lineHeight: 16, marginTop: 4 },
+  footerActions: { marginTop: 24, gap: 12 },
+  deleteButton: { alignItems: "center", paddingVertical: 12 },
+  deleteText: { fontSize: 13, fontWeight: "700" },
   pressed: { opacity: 0.8 },
 });

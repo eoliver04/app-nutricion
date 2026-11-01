@@ -1,15 +1,22 @@
 import { StyleSheet, Text, View } from "react-native";
 
-import type { AppColors } from "@/constants/theme";
 import type { NutritionFood } from "@/features/nutrition/types";
+import { useAppColors } from "@/hooks/use-app-colors";
 
-export function FoodAnalysisList({
-  colors,
-  foods,
-}: {
-  colors: AppColors;
-  foods: NutritionFood[];
-}) {
+export function FoodAnalysisList({ foods }: { foods: NutritionFood[] }) {
+  const colors = useAppColors();
+
+  if (foods.length === 0) {
+    return (
+      <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
+        <Text style={[styles.empty, { color: colors.textSecondary }]}>
+          No se han reconocido alimentos en esta foto. Prueba con más luz o
+          acercando la cámara al plato.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
       {foods.map((food, index) => (
@@ -17,26 +24,41 @@ export function FoodAnalysisList({
           key={`${food.name}-${food.fdcId ?? index}`}
           style={[
             styles.row,
-            index < foods.length - 1 && styles.divider,
+            index < foods.length - 1 && {
+              borderBottomWidth: 1,
+              borderBottomColor: colors.border,
+            },
           ]}
+          accessible
+          accessibilityLabel={`${food.name}, ${Math.round(food.grams)} gramos, ${Math.round(food.calories)} kilocalorías, ${Math.round(food.protein)} gramos de proteína, ${Math.round(food.carbohydrates)} de carbohidratos y ${Math.round(food.fat)} de grasa`}
         >
-          <View style={styles.icon}>
-            <Text style={styles.iconText}>◈</Text>
+          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+            <Text style={[styles.iconText, { color: colors.primary }]}>◈</Text>
           </View>
           <View style={styles.main}>
-            <Text style={[styles.name, { color: colors.text }]}>
-              {food.name}
-            </Text>
+            <Text style={[styles.name, { color: colors.text }]}>{food.name}</Text>
             <Text style={[styles.weight, { color: colors.textSecondary }]}>
-              {Math.round(food.grams ?? 0)}g · {Math.round(food.calories ?? 0)} kcal
+              {Math.round(food.grams)}g · {Math.round(food.calories)} kcal
             </Text>
+            {food.usdaMatch ? (
+              <Text
+                style={[styles.match, { color: colors.textSecondary }]}
+                numberOfLines={1}
+              >
+                USDA: {food.usdaMatch}
+              </Text>
+            ) : (
+              <Text style={[styles.match, { color: colors.warningTextMuted }]}>
+                Sin coincidencia en USDA
+              </Text>
+            )}
           </View>
           <View style={styles.macros}>
             <Text style={[styles.macro, { color: colors.text }]}>
-              {Math.round(food.protein ?? 0)}g P
+              {Math.round(food.protein)}g P
             </Text>
             <Text style={[styles.macro, { color: colors.textSecondary }]}>
-              {Math.round(food.carbohydrates ?? 0)}g C · {Math.round(food.fat ?? 0)}g G
+              {Math.round(food.carbohydrates)}g C · {Math.round(food.fat)}g G
             </Text>
           </View>
         </View>
@@ -47,23 +69,20 @@ export function FoodAnalysisList({
 
 const styles = StyleSheet.create({
   card: { borderRadius: 20, paddingHorizontal: 15 },
-  row: { minHeight: 76, flexDirection: "row", alignItems: "center" },
-  divider: {
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(120, 140, 130, 0.15)",
-  },
+  empty: { fontSize: 13, lineHeight: 18, paddingVertical: 22, textAlign: "center" },
+  row: { minHeight: 76, flexDirection: "row", alignItems: "center", paddingVertical: 10 },
   icon: {
     width: 40,
     height: 40,
     borderRadius: 13,
-    backgroundColor: "#D7F4E8",
     alignItems: "center",
     justifyContent: "center",
   },
-  iconText: { color: "#1A9B6B", fontSize: 18 },
+  iconText: { fontSize: 18 },
   main: { flex: 1, marginLeft: 12 },
   name: { fontSize: 13, fontWeight: "700" },
   weight: { fontSize: 11, marginTop: 4 },
+  match: { fontSize: 10, marginTop: 3 },
   macros: { alignItems: "flex-end" },
   macro: { fontSize: 10, marginTop: 3 },
 });

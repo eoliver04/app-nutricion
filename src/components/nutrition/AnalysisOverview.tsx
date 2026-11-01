@@ -1,39 +1,58 @@
-import { Image, StyleSheet, Text, View } from "react-native";
+import { Image } from "expo-image";
+import { StyleSheet, Text, View } from "react-native";
 
-import type { AppColors } from "@/constants/theme";
+import {
+  averageConfidence,
+  confidenceLabel,
+  formatDateTime,
+  percentOf,
+} from "@/features/nutrition/summary";
 import type { NutritionAnalysis } from "@/features/nutrition/types";
+import { useAppColors } from "@/hooks/use-app-colors";
 
 export function AnalysisOverview({
-  colors,
   imageUri,
   analysis,
+  analyzedAt,
+  dailyCalorieGoal,
 }: {
-  colors: AppColors;
-  imageUri?: string;
+  imageUri?: string | null;
   analysis?: NutritionAnalysis;
+  analyzedAt: Date;
+  dailyCalorieGoal: number;
 }) {
+  const colors = useAppColors();
   const calories = Math.round(analysis?.totals.calories ?? 0);
   const foodCount = analysis?.foods.length ?? 0;
-  const targetCalories = 2000;
-  const percent = targetCalories > 0 ? Math.min(100, Math.round((calories / targetCalories) * 100)) : 0;
-  const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const percent = percentOf(calories, dailyCalorieGoal);
+  const confidence = confidenceLabel(
+    averageConfidence(analysis?.foods ?? []),
+  );
 
   return (
     <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
       {imageUri ? (
-        <Image source={{ uri: imageUri }} style={styles.image} />
+        <Image
+          source={{ uri: imageUri }}
+          style={styles.image}
+          contentFit="cover"
+          accessibilityLabel="Foto del plato analizado"
+        />
       ) : null}
       <View style={styles.topline}>
-        <Text style={styles.badge}>✦ ANALIZADO POR IA</Text>
+        <Text style={[styles.badge, { color: colors.primary }]}>
+          ✦ ANALIZADO POR IA
+        </Text>
         <Text style={[styles.time, { color: colors.textSecondary }]}>
-          {time}
+          {formatDateTime(analyzedAt)}
         </Text>
       </View>
       <Text style={[styles.title, { color: colors.text }]}>
         {foodCount > 0 ? "Comida analizada" : "Sin alimentos"}
       </Text>
       <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-        {foodCount} {foodCount === 1 ? "alimento detectado" : "alimentos detectados"} · confianza alta
+        {foodCount} {foodCount === 1 ? "alimento detectado" : "alimentos detectados"}
+        {confidence ? ` · ${confidence}` : ""}
       </Text>
       <View style={styles.calorieLine}>
         <Text style={[styles.calories, { color: colors.text }]}>
@@ -43,10 +62,21 @@ export function AnalysisOverview({
           kcal estimadas
         </Text>
       </View>
-      <View style={styles.track}>
-        <View style={[styles.progress, { width: `${percent}%` }]} />
+      <View
+        style={[styles.track, { backgroundColor: colors.track }]}
+        accessibilityRole="progressbar"
+        accessibilityValue={{ min: 0, max: 100, now: percent }}
+      >
+        <View
+          style={[
+            styles.progress,
+            { width: `${percent}%`, backgroundColor: colors.primary },
+          ]}
+        />
       </View>
-      <Text style={styles.caption}>{percent}% de tu objetivo diario ({targetCalories} kcal)</Text>
+      <Text style={[styles.caption, { color: colors.primary }]}>
+        {percent}% de tu objetivo diario ({dailyCalorieGoal} kcal)
+      </Text>
     </View>
   );
 }
@@ -60,7 +90,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   badge: {
-    color: "#1A9B6B",
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 0.7,
@@ -79,14 +108,12 @@ const styles = StyleSheet.create({
   track: {
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#D6E5DE",
     overflow: "hidden",
     marginTop: 8,
   },
   progress: {
     height: "100%",
     borderRadius: 4,
-    backgroundColor: "#35C98F",
   },
-  caption: { color: "#1A9B6B", fontSize: 11, fontWeight: "700", marginTop: 8 },
+  caption: { fontSize: 11, fontWeight: "700", marginTop: 8 },
 });

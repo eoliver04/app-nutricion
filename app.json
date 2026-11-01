@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "app-nutricion",
+    "name": "NutriAI",
     "slug": "app-nutricion",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -36,15 +36,14 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#1A9B6B",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
       ],
       "expo-font",
       "expo-image",
-      "expo-status-bar",
-      "expo-web-browser"
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,

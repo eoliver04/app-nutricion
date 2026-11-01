@@ -1,56 +1,48 @@
-# Welcome to your Expo app 👋
+# NutriAI (app-nutricion)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+App móvil (Expo + React Native + Expo Router) que fotografía un plato, lo envía
+al backend [traking-food](../traking-food) y muestra calorías y macros. Los
+análisis y los objetivos del usuario se guardan en el propio dispositivo.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Puesta en marcha
 
 ```bash
-npm run reset-project
+npm install
+cp .env.example .env     # apunta EXPO_PUBLIC_API_URL a tu backend
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+En un dispositivo físico, `EXPO_PUBLIC_API_URL` debe ser la IP de tu máquina en
+la red local (por ejemplo `http://192.168.1.50:3000`), no `localhost`.
 
-### Other setup steps
+## Scripts
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+npm run lint        # eslint (expo lint)
+npm run typecheck   # tsc --noEmit (requiere haber ejecutado expo start una vez)
+npm test            # jest (jest-expo)
+```
 
-## Learn more
+## Estructura
 
-To learn more about developing your project with Expo, look at the following resources:
+```
+src/
+  app/                 # rutas (Expo Router): index, analysis, profile
+  components/          # UI reutilizable; nutrition/ para las tarjetas del dominio
+  constants/theme.ts   # paleta light/dark; todo color sale de aquí
+  features/nutrition/  # api (subida), prepare-image (resize), storage, summary
+  features/profile/    # objetivos del usuario (AsyncStorage)
+  hooks/               # useAppColors, useColorScheme
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Flujo
 
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+1. El usuario hace una foto o elige una de la galería (sin recorte forzado).
+2. `prepareImage` la reduce a 1600 px y la recodifica a JPEG (85 %), para no
+   superar el límite de 5 MB del servidor.
+3. `analyzeFood` la sube a `POST /food-analysis` con un timeout de 60 s y
+   valida la respuesta.
+4. El resultado se guarda con `saveAnalysis` (AsyncStorage) y la foto se copia
+   al directorio de documentos.
+5. La pantalla de inicio calcula el resumen del día a partir del historial y
+   de los objetivos del perfil.

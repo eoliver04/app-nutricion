@@ -1,25 +1,34 @@
 import * as ImagePicker from "expo-image-picker";
 import { Alert, Platform } from "react-native";
 
+import { prepareImage } from "./prepare-image";
 import type { NutritionImage } from "./types";
 
 function showPermissionAlert(message: string) {
   Alert.alert("Permiso necesario", message);
 }
 
-function getImage(
+async function toNutritionImage(
   result: ImagePicker.ImagePickerResult,
-): NutritionImage | null {
+): Promise<NutritionImage | null> {
   if (result.canceled || !result.assets[0]) return null;
   const asset = result.assets[0];
-  return {
+  return prepareImage({
     uri: asset.uri,
     width: asset.width,
     height: asset.height,
     fileName: asset.fileName,
     mimeType: asset.mimeType,
-  };
+  });
 }
+
+// Sin recorte forzado: un encuadre 4:3 puede dejar comida fuera de la foto.
+const pickerOptions: ImagePicker.ImagePickerOptions = {
+  mediaTypes: ["images"],
+  allowsEditing: false,
+  quality: 1,
+  exif: false,
+};
 
 export async function takeFoodPhoto(): Promise<NutritionImage | null> {
   if (Platform.OS !== "web") {
@@ -32,31 +41,21 @@ export async function takeFoodPhoto(): Promise<NutritionImage | null> {
     }
   }
 
-  const result = await ImagePicker.launchCameraAsync({
-    mediaTypes: ["images"],
-    allowsEditing: true,
-    aspect: [4, 3],
-    quality: 0.9,
-  });
-
-  return getImage(result);
+  const result = await ImagePicker.launchCameraAsync(pickerOptions);
+  return toNutritionImage(result);
 }
 
 export async function pickFoodPhoto(): Promise<NutritionImage | null> {
-  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted && Platform.OS !== "web") {
-    showPermissionAlert(
-      "Activa el acceso a tus fotos en los ajustes para seleccionar un plato.",
-    );
-    return null;
+  if (Platform.OS !== "web") {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      showPermissionAlert(
+        "Activa el acceso a tus fotos en los ajustes para seleccionar un plato.",
+      );
+      return null;
+    }
   }
 
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ["images"],
-    allowsEditing: true,
-    aspect: [4, 3],
-    quality: 0.9,
-  });
-
-  return getImage(result);
+  const result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
+  return toNutritionImage(result);
 }
