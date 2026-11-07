@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/screen-header";
 import { BottomTabInset, MaxContentWidth } from "@/constants/theme";
+import { checkBackend, getBaseUrl, type BackendCheck } from "@/features/nutrition/api";
 import { clearAnalyses } from "@/features/nutrition/storage";
 import {
   normalizeSettings,
@@ -197,6 +198,9 @@ function ProfileForm({
         </Text>
       </Pressable>
 
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Servidor</Text>
+      <BackendStatusCard />
+
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Datos</Text>
       <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
         <Text style={[styles.hint, { color: colors.textSecondary }]}>
@@ -214,6 +218,65 @@ function ProfileForm({
         </Text>
       </Pressable>
     </>
+  );
+}
+
+function BackendStatusCard() {
+  const colors = useAppColors();
+  const [result, setResult] = useState<BackendCheck | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+
+  let configuredUrl: string;
+  try {
+    configuredUrl = getBaseUrl();
+  } catch {
+    configuredUrl = "(sin configurar)";
+  }
+
+  const handleCheck = async () => {
+    setIsChecking(true);
+    try {
+      setResult(await checkBackend());
+    } finally {
+      setIsChecking(false);
+    }
+  };
+
+  return (
+    <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
+      <Text style={[styles.hint, { color: colors.textSecondary }]} selectable>
+        URL configurada: {configuredUrl}
+      </Text>
+      <Pressable
+        onPress={handleCheck}
+        disabled={isChecking}
+        style={({ pressed }) => [
+          styles.checkButton,
+          { backgroundColor: colors.primarySoft },
+          (pressed || isChecking) && styles.pressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: isChecking, busy: isChecking }}
+      >
+        <Text style={[styles.checkText, { color: colors.onPrimarySoft }]}>
+          {isChecking ? "Comprobando..." : "Comprobar conexión con el servidor"}
+        </Text>
+      </Pressable>
+      {result ? (
+        <Text
+          style={[
+            styles.checkResult,
+            { color: result.ok ? colors.primary : colors.danger },
+          ]}
+          selectable
+          accessibilityLiveRegion="polite"
+        >
+          {result.ok
+            ? `Conectado (HTTP ${result.status}) en ${result.elapsedMs} ms`
+            : `Sin conexión tras ${result.elapsedMs} ms. ${result.detail ?? ""}`}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -251,6 +314,14 @@ const styles = StyleSheet.create({
   },
   saveText: { fontSize: 14, fontWeight: "700" },
   hint: { fontSize: 12, lineHeight: 17, paddingVertical: 14 },
+  checkButton: {
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  checkText: { fontSize: 13, fontWeight: "700" },
+  checkResult: { fontSize: 12, lineHeight: 17, paddingBottom: 14 },
   dangerButton: { alignItems: "center", paddingVertical: 12 },
   dangerText: { fontSize: 13, fontWeight: "800" },
   pressed: { opacity: 0.8 },

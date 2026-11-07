@@ -1,3 +1,4 @@
+import { File } from "expo-file-system";
 import { Platform } from "react-native";
 
 import type {
@@ -10,6 +11,14 @@ import type {
 /** Gemini + USDA pueden tardar; damos margen antes de abortar. */
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
+/** Traza en la consola de Metro, con prefijo para localizarla rápido. */
+const log = {
+  info: (message: string, ...rest: unknown[]) =>
+    console.log(`[NutriAI] ${message}`, ...rest),
+  error: (message: string, ...rest: unknown[]) =>
+    console.error(`[NutriAI] ${message}`, ...rest),
+};
+
 export class ApiError extends Error {
   readonly status?: number;
 
@@ -20,7 +29,7 @@ export class ApiError extends Error {
   }
 }
 
-export function getAnalysisUrl(
+export function getBaseUrl(
   baseUrl: string | undefined = process.env.EXPO_PUBLIC_API_URL,
 ): string {
   if (!baseUrl || baseUrl.trim() === "") {
@@ -28,7 +37,67 @@ export function getAnalysisUrl(
       "Falta configurar EXPO_PUBLIC_API_URL en el archivo .env.",
     );
   }
-  return `${baseUrl.trim().replace(/\/+$/, "")}/food-analysis`;
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
+export function getAnalysisUrl(
+  baseUrl: string | undefined = process.env.EXPO_PUBLIC_API_URL,
+): string {
+  return `${getBaseUrl(baseUrl)}/food-analysis`;
+}
+
+export type BackendCheck = {
+  url: string;
+  ok: boolean;
+  /** Código HTTP recibido, o `null` si no hubo respuesta. */
+  status: number | null;
+  /** Milisegundos hasta la respuesta o el fallo. */
+  elapsedMs: number;
+  /** Mensaje técnico del fallo, si lo hubo. */
+  detail: string | null;
+};
+
+/**
+ * Hace un GET al health check del backend desde el propio dispositivo.
+ * Sirve para distinguir un problema de red de un problema en la subida.
+ */
+export async function checkBackend(
+  timeoutMs: number = 10_000,
+): Promise<BackendCheck> {
+  const url = `${getBaseUrl()}/`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  try {
+    log.info(`Comprobando conexión: GET ${url}`);
+    const response = await fetch(url, { signal: controller.signal });
+    const result: BackendCheck = {
+      url,
+      ok: response.ok,
+      status: response.status,
+      elapsedMs: Date.now() - startedAt,
+      detail: response.ok ? null : `HTTP ${response.status}`,
+    };
+    log.info(`Comprobación: HTTP ${result.status} en ${result.elapsedMs} ms`);
+    return result;
+  } catch (error: unknown) {
+    const detail =
+      error instanceof Error
+        ? error.name === "AbortError"
+          ? `Sin respuesta en ${timeoutMs / 1000} s`
+          : `${error.name}: ${error.message}`
+        : String(error);
+    log.error(`Comprobación fallida (${url}): ${detail}`, error);
+    return {
+      url,
+      ok: false,
+      status: null,
+      elapsedMs: Date.now() - startedAt,
+      detail,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 const toNumber = (value: unknown): number =>
@@ -136,7 +205,6 @@ export function parseAnalysisResponse(
 async function buildFormData(image: NutritionImage): Promise<FormData> {
   const formData = new FormData();
   const name = image.fileName ?? "food.jpg";
-  const type = image.mimeType ?? "image/jpeg";
 
   if (Platform.OS === "web") {
     const response = await fetch(image.uri);
@@ -145,8 +213,11 @@ async function buildFormData(image: NutritionImage): Promise<FormData> {
     return formData;
   }
 
-  // React Native acepta objetos {uri, name, type} como ficheros en FormData.
-  formData.append("image", { uri: image.uri, name, type } as unknown as Blob);
+  // El fetch de Expo (SDK 54+) no acepta el formato {uri, name, type} de
+  // React Native: necesita un Blob real. `File` de expo-file-system lo
+  // implementa y lee el fichero local bajo demanda.
+  const file = new File(image.uri);
+  formData.append("image", file as unknown as Blob, name);
   return formData;
 }
 
@@ -168,6 +239,9 @@ export async function analyzeFood(
   options.signal?.addEventListener("abort", onExternalAbort);
 
   try {
+    log.info(
+      `Subiendo imagen: POST ${url} (uri=${image.uri}, type=${image.mimeType ?? "?"}, ${image.width ?? "?"}x${image.height ?? "?"})`,
+    );
     const formData = await buildFormData(image);
     const response = await fetch(url, {
       method: "POST",
@@ -176,8 +250,10 @@ export async function analyzeFood(
       signal: controller.signal,
     });
     const text = await response.text();
+    log.info(`Respuesta del servidor: HTTP ${response.status} (${text.length} bytes)`);
     return parseAnalysisResponse(text, response.status);
   } catch (error: unknown) {
+    log.error("Fallo al analizar la imagen:", error);
     if (error instanceof ApiError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
       throw new ApiError(
@@ -186,8 +262,10 @@ export async function analyzeFood(
           : "El análisis ha tardado demasiado. Comprueba tu conexión e inténtalo de nuevo.",
       );
     }
+    const detail =
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     throw new ApiError(
-      "No se pudo conectar con el servidor. Comprueba que esté en marcha y que EXPO_PUBLIC_API_URL sea correcta.",
+      `No se pudo conectar con el servidor (${url}). Comprueba que esté en marcha y que EXPO_PUBLIC_API_URL sea correcta.\n\nDetalle técnico: ${detail}`,
     );
   } finally {
     clearTimeout(timeout);
