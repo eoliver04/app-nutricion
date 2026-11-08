@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -8,12 +8,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/screen-header";
+import { AuthInput } from "@/components/ui/auth-input";
+import { PrimaryButton } from "@/components/ui/primary-button";
 import { BottomTabInset, MaxContentWidth } from "@/constants/theme";
 import { signOut } from "@/features/auth/auth-api";
 import { useSession } from "@/features/auth/use-session";
@@ -43,10 +44,34 @@ const GOAL_FIELDS: { key: keyof Draft; label: string; unit: string }[] = [
   { key: "fatGoal", label: "Grasas", unit: "g" },
 ];
 
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+/** Nombre guardado en Supabase al registrarse, si lo hay. */
+function useAccountName(): string {
+  const { session } = useSession();
+  const metadataName = session?.user.user_metadata?.name;
+  return typeof metadataName === "string" ? metadataName.trim() : "";
+}
+
 export default function ProfileScreen() {
   const colors = useAppColors();
   const insets = useSafeAreaInsets();
   const { settings, isLoading, update } = useUserSettings();
+  const accountName = useAccountName();
+
+  // Un único nombre en toda la pantalla: el editable. Si aún no se ha
+  // guardado ninguno en el dispositivo, arrancamos con el de la cuenta.
+  const initialSettings = useMemo(
+    () => (settings.name ? settings : { ...settings, name: accountName }),
+    [settings, accountName],
+  );
 
   return (
     <KeyboardAvoidingView
@@ -61,11 +86,15 @@ export default function ProfileScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={[styles.container, { maxWidth: MaxContentWidth }]}>
-          <ScreenHeader title="Mi perfil" />
+          <ScreenHeader title="Mi perfil" showBack={false} />
           {isLoading ? (
             <ActivityIndicator color={colors.primary} style={styles.loader} />
           ) : (
-            <ProfileForm initial={settings} onSave={update} />
+            <ProfileForm
+              key={initialSettings.name}
+              initial={initialSettings}
+              onSave={update}
+            />
           )}
         </View>
       </ScrollView>
@@ -129,79 +158,53 @@ function ProfileForm({
   return (
     <>
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Cuenta</Text>
-      <AccountCard />
+      <AccountCard displayName={draft.name} />
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Sobre ti</Text>
       <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
-        <View style={styles.fieldRow}>
-          <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-            Nombre
-          </Text>
-          <TextInput
-            value={draft.name}
-            onChangeText={(value) => setField("name", value)}
-            placeholder="¿Cómo te llamas?"
-            placeholderTextColor={colors.textSecondary}
-            maxLength={40}
-            autoCapitalize="words"
-            style={[styles.input, { color: colors.text }]}
-            accessibilityLabel="Nombre"
-          />
-        </View>
+        <AuthInput
+          label="Nombre"
+          icon="person-outline"
+          value={draft.name}
+          onChangeText={(value) => setField("name", value)}
+          placeholder="¿Cómo te llamas?"
+          maxLength={40}
+          autoCapitalize="words"
+          autoComplete="name"
+          textContentType="name"
+          returnKeyType="done"
+          accessibilityLabel="Nombre"
+        />
       </View>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>
         Tus objetivos
       </Text>
       <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
-        {GOAL_FIELDS.map((field, index) => (
-          <View
+        {GOAL_FIELDS.map((field) => (
+          <AuthInput
             key={field.key}
-            style={[
-              styles.fieldRow,
-              index < GOAL_FIELDS.length - 1 && {
-                borderBottomWidth: 1,
-                borderBottomColor: colors.border,
-              },
-            ]}
-          >
-            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-              {field.label}
-            </Text>
-            <View style={styles.inputWithUnit}>
-              <TextInput
-                value={draft[field.key]}
-                onChangeText={(value) =>
-                  setField(field.key, value.replace(/[^\d]/g, ""))
-                }
-                keyboardType="number-pad"
-                maxLength={5}
-                style={[styles.input, styles.numberInput, { color: colors.text }]}
-                accessibilityLabel={`${field.label} en ${field.unit}`}
-              />
-              <Text style={[styles.unit, { color: colors.textSecondary }]}>
-                {field.unit}
-              </Text>
-            </View>
-          </View>
+            label={field.label}
+            suffix={field.unit}
+            value={draft[field.key]}
+            onChangeText={(value) =>
+              setField(field.key, value.replace(/[^\d]/g, ""))
+            }
+            keyboardType="number-pad"
+            maxLength={5}
+            returnKeyType="done"
+            accessibilityLabel={`${field.label} en ${field.unit}`}
+          />
         ))}
       </View>
 
-      <Pressable
-        onPress={handleSave}
-        disabled={isSaving}
-        style={({ pressed }) => [
-          styles.saveButton,
-          { backgroundColor: colors.primary },
-          (pressed || isSaving) && styles.pressed,
-        ]}
-        accessibilityRole="button"
-        accessibilityState={{ disabled: isSaving, busy: isSaving }}
-      >
-        <Text style={[styles.saveText, { color: colors.onPrimary }]}>
-          {isSaving ? "Guardando..." : "Guardar cambios"}
-        </Text>
-      </Pressable>
+      <View style={styles.saveButton}>
+        <PrimaryButton
+          label={isSaving ? "Guardando..." : "Guardar cambios"}
+          onPress={handleSave}
+          loading={isSaving}
+        />
+      </View>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Servidor</Text>
       <BackendStatusCard />
@@ -226,7 +229,7 @@ function ProfileForm({
   );
 }
 
-function AccountCard() {
+function AccountCard({ displayName }: { displayName: string }) {
   const colors = useAppColors();
   const { session } = useSession();
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -241,41 +244,31 @@ function AccountCard() {
     // Si sale bien, el layout raíz desmonta esta pantalla al perder la sesión.
   };
 
-  const metadataName = session?.user.user_metadata?.name;
-  const accountName =
-    typeof metadataName === "string" && metadataName.trim() !== ""
-      ? metadataName
-      : "—";
+  const name = displayName.trim();
 
   return (
     <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
-      <View
-        style={[
-          styles.fieldRow,
-          { borderBottomWidth: 1, borderBottomColor: colors.border },
-        ]}
-      >
-        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-          Nombre
-        </Text>
-        <Text
-          style={[styles.fieldValue, { color: colors.text }]}
-          numberOfLines={1}
-        >
-          {accountName}
-        </Text>
-      </View>
-      <View style={styles.fieldRow}>
-        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-          Email
-        </Text>
-        <Text
-          style={[styles.fieldValue, { color: colors.text }]}
-          numberOfLines={1}
-          selectable
-        >
-          {session?.user.email ?? "—"}
-        </Text>
+      <View style={styles.accountRow}>
+        <View style={[styles.avatar, { backgroundColor: colors.primarySoft }]}>
+          <Text style={[styles.avatarText, { color: colors.onPrimarySoft }]}>
+            {initialsOf(name)}
+          </Text>
+        </View>
+        <View style={styles.accountCopy}>
+          <Text
+            style={[styles.accountName, { color: colors.text }]}
+            numberOfLines={1}
+          >
+            {name || "Sin nombre"}
+          </Text>
+          <Text
+            style={[styles.accountEmail, { color: colors.textSecondary }]}
+            numberOfLines={1}
+            selectable
+          >
+            {session?.user.email ?? "—"}
+          </Text>
+        </View>
       </View>
       <Pressable
         onPress={handleSignOut}
@@ -361,35 +354,32 @@ const styles = StyleSheet.create({
   container: { width: "100%", alignSelf: "center", paddingHorizontal: 20 },
   loader: { marginTop: 40 },
   sectionTitle: { fontSize: 18, fontWeight: "800", marginBottom: 12 },
-  card: { borderRadius: 18, paddingHorizontal: 16, marginBottom: 26 },
-  fieldRow: {
+  card: {
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 4,
+    marginBottom: 26,
+  },
+  accountRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 10,
-    minHeight: 56,
-    gap: 12,
+    gap: 14,
+    marginBottom: 14,
   },
-  fieldLabel: { fontSize: 13 },
-  fieldValue: { fontSize: 14, fontWeight: "700", textAlign: "right", flex: 1 },
-  input: {
-    fontSize: 14,
-    fontWeight: "700",
-    textAlign: "right",
-    flex: 1,
-    paddingVertical: 6,
-  },
-  inputWithUnit: { flexDirection: "row", alignItems: "center", gap: 6 },
-  numberInput: { minWidth: 70 },
-  unit: { fontSize: 12 },
-  saveButton: {
-    borderRadius: 14,
-    paddingVertical: 14,
+  avatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     alignItems: "center",
-    marginBottom: 32,
+    justifyContent: "center",
   },
-  saveText: { fontSize: 14, fontWeight: "700" },
-  hint: { fontSize: 12, lineHeight: 17, paddingVertical: 14 },
+  avatarText: { fontSize: 16, fontWeight: "800" },
+  accountCopy: { flex: 1, minWidth: 0 },
+  accountName: { fontSize: 17, fontWeight: "800" },
+  accountEmail: { fontSize: 13, marginTop: 2 },
+  saveButton: { marginBottom: 32 },
+  hint: { fontSize: 12, lineHeight: 17, paddingBottom: 14 },
   checkButton: {
     borderRadius: 12,
     paddingVertical: 12,

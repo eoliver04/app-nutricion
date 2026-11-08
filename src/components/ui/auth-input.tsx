@@ -19,7 +19,11 @@ import { useAppColors } from "@/hooks/use-app-colors";
 
 export type AuthInputProps = Omit<TextInputProps, "style"> & {
   /** Icono a la izquierda del campo. */
-  icon: keyof typeof Ionicons.glyphMap;
+  icon?: keyof typeof Ionicons.glyphMap;
+  /** Etiqueta encima del campo. */
+  label?: string;
+  /** Texto fijo a la derecha, por ejemplo una unidad ("kcal", "g"). */
+  suffix?: string;
   /** Error del campo; al aparecer, el input hace un pequeño shake. */
   error?: string;
   /** Cambia el valor para forzar otro shake aunque el error no cambie. */
@@ -35,7 +39,17 @@ const SHAKE_STEP_MS = 50;
 
 /** Campo de formulario con icono, foco resaltado, error inline y shake. */
 export const AuthInput = forwardRef<AuthInputHandle, AuthInputProps>(function AuthInput(
-  { icon, error, shakeKey = 0, isPassword = false, onFocus, onBlur, ...inputProps },
+  {
+    icon,
+    label,
+    suffix,
+    error,
+    shakeKey = 0,
+    isPassword = false,
+    onFocus,
+    onBlur,
+    ...inputProps
+  },
   ref,
 ) {
   const colors = useAppColors();
@@ -75,6 +89,9 @@ export const AuthInput = forwardRef<AuthInputHandle, AuthInputProps>(function Au
 
   return (
     <View style={styles.wrapper}>
+      {label ? (
+        <Text style={[styles.label, { color: colors.textSecondary }]}>{label}</Text>
+      ) : null}
       <Animated.View
         style={[
           styles.field,
@@ -82,7 +99,9 @@ export const AuthInput = forwardRef<AuthInputHandle, AuthInputProps>(function Au
           shakeStyle,
         ]}
       >
-        <Ionicons name={icon} size={20} color={iconColor} style={styles.icon} />
+        {icon ? (
+          <Ionicons name={icon} size={20} color={iconColor} style={styles.icon} />
+        ) : null}
         <TextInput
           ref={ref}
           {...inputProps}
@@ -99,6 +118,11 @@ export const AuthInput = forwardRef<AuthInputHandle, AuthInputProps>(function Au
           style={[styles.input, { color: colors.text }]}
           accessibilityState={{ ...inputProps.accessibilityState }}
         />
+        {suffix ? (
+          <Text style={[styles.suffix, { color: colors.textSecondary }]}>
+            {suffix}
+          </Text>
+        ) : null}
         {isPassword ? (
           <Pressable
             onPress={() => setIsHidden((previous) => !previous)}
@@ -131,6 +155,8 @@ export const AuthInput = forwardRef<AuthInputHandle, AuthInputProps>(function Au
 
 const styles = StyleSheet.create({
   wrapper: { marginBottom: 12 },
+  label: { fontSize: 13, fontWeight: "600", marginBottom: 6, marginLeft: 4 },
+  suffix: { fontSize: 13, fontWeight: "600" },
   field: {
     height: INPUT_HEIGHT,
     borderRadius: 14,

@@ -23,15 +23,7 @@ export default function RootLayout() {
             <ActivityIndicator color={colors.primary} size="large" />
           </View>
         ) : null}
-        {!loading && session ? (
-          <Animated.View
-            key="tabs"
-            entering={FadeIn.duration(250)}
-            style={styles.flex}
-          >
-            <AppTabs />
-          </Animated.View>
-        ) : null}
+        {!loading && session ? <AppTabs /> : null}
         {!loading && !session ? (
           // Capa superior: al conseguir sesión se desvanece sobre las tabs.
           <Animated.View
