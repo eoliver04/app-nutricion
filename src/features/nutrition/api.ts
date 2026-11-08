@@ -1,6 +1,9 @@
 import { File } from "expo-file-system";
 import { Platform } from "react-native";
 
+import { SESSION_EXPIRED_MESSAGE, signOut } from "@/features/auth/auth-api";
+import { supabase } from "@/features/auth/supabase";
+
 import type {
   NutritionAnalysis,
   NutritionFood,
@@ -221,6 +224,16 @@ async function buildFormData(image: NutritionImage): Promise<FormData> {
   return formData;
 }
 
+/**
+ * Cabecera `Authorization` con el access_token de la sesión actual.
+ * `getSession()` refresca el token si ha caducado. Sin sesión devuelve `{}`.
+ */
+export async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export type AnalyzeOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -242,15 +255,24 @@ export async function analyzeFood(
     log.info(
       `Subiendo imagen: POST ${url} (uri=${image.uri}, type=${image.mimeType ?? "?"}, ${image.width ?? "?"}x${image.height ?? "?"})`,
     );
-    const formData = await buildFormData(image);
+    const [formData, authHeaders] = await Promise.all([
+      buildFormData(image),
+      getAuthHeaders(),
+    ]);
     const response = await fetch(url, {
       method: "POST",
       body: formData,
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", ...authHeaders },
       signal: controller.signal,
     });
     const text = await response.text();
     log.info(`Respuesta del servidor: HTTP ${response.status} (${text.length} bytes)`);
+    if (response.status === 401) {
+      // El token ya no vale para el backend: cerramos sesión para que la app
+      // vuelva a la pantalla de acceso.
+      await signOut();
+      throw new ApiError(SESSION_EXPIRED_MESSAGE, 401);
+    }
     return parseAnalysisResponse(text, response.status);
   } catch (error: unknown) {
     log.error("Fallo al analizar la imagen:", error);

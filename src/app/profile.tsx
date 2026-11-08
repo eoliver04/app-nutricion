@@ -15,6 +15,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/screen-header";
 import { BottomTabInset, MaxContentWidth } from "@/constants/theme";
+import { signOut } from "@/features/auth/auth-api";
+import { useSession } from "@/features/auth/use-session";
 import { checkBackend, getBaseUrl, type BackendCheck } from "@/features/nutrition/api";
 import { clearAnalyses } from "@/features/nutrition/storage";
 import {
@@ -126,6 +128,9 @@ function ProfileForm({
 
   return (
     <>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Cuenta</Text>
+      <AccountCard />
+
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Sobre ti</Text>
       <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
         <View style={styles.fieldRow}>
@@ -221,6 +226,76 @@ function ProfileForm({
   );
 }
 
+function AccountCard() {
+  const colors = useAppColors();
+  const { session } = useSession();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    setIsSigningOut(true);
+    const { error } = await signOut();
+    if (error) {
+      setIsSigningOut(false);
+      Alert.alert("Error", error);
+    }
+    // Si sale bien, el layout raíz desmonta esta pantalla al perder la sesión.
+  };
+
+  const metadataName = session?.user.user_metadata?.name;
+  const accountName =
+    typeof metadataName === "string" && metadataName.trim() !== ""
+      ? metadataName
+      : "—";
+
+  return (
+    <View style={[styles.card, { backgroundColor: colors.backgroundElement }]}>
+      <View
+        style={[
+          styles.fieldRow,
+          { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+          Nombre
+        </Text>
+        <Text
+          style={[styles.fieldValue, { color: colors.text }]}
+          numberOfLines={1}
+        >
+          {accountName}
+        </Text>
+      </View>
+      <View style={styles.fieldRow}>
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+          Email
+        </Text>
+        <Text
+          style={[styles.fieldValue, { color: colors.text }]}
+          numberOfLines={1}
+          selectable
+        >
+          {session?.user.email ?? "—"}
+        </Text>
+      </View>
+      <Pressable
+        onPress={handleSignOut}
+        disabled={isSigningOut}
+        style={({ pressed }) => [
+          styles.checkButton,
+          { backgroundColor: colors.primarySoft },
+          (pressed || isSigningOut) && styles.pressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: isSigningOut, busy: isSigningOut }}
+      >
+        <Text style={[styles.checkText, { color: colors.onPrimarySoft }]}>
+          {isSigningOut ? "Cerrando sesión..." : "Cerrar sesión"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function BackendStatusCard() {
   const colors = useAppColors();
   const [result, setResult] = useState<BackendCheck | null>(null);
@@ -296,6 +371,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   fieldLabel: { fontSize: 13 },
+  fieldValue: { fontSize: 14, fontWeight: "700", textAlign: "right", flex: 1 },
   input: {
     fontSize: 14,
     fontWeight: "700",

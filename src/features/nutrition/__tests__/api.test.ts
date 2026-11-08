@@ -1,4 +1,11 @@
-import { ApiError, getAnalysisUrl, parseAnalysisResponse } from "../api";
+import { supabase } from "@/features/auth/supabase";
+
+import {
+  analyzeFood,
+  ApiError,
+  getAnalysisUrl,
+  parseAnalysisResponse,
+} from "../api";
 
 describe("getAnalysisUrl", () => {
   it("construye la URL quitando barras finales", () => {
@@ -102,5 +109,89 @@ describe("parseAnalysisResponse", () => {
 
   it("avisa cuando el cuerpo no es JSON", () => {
     expect(() => parseAnalysisResponse("nope", 200)).toThrow(/JSON válido/);
+  });
+});
+
+// `new File(uri)` necesita el módulo nativo; en el test basta con un constructor vacío.
+jest.mock("expo-file-system", () => ({ File: jest.fn() }));
+
+describe("analyzeFood", () => {
+  const image = { uri: "file:///tmp/food.jpg", mimeType: "image/jpeg" };
+  const originalFetch = globalThis.fetch;
+  const originalFormData = globalThis.FormData;
+  const fetchMock = jest.fn();
+  const getSession = jest.mocked(supabase.auth.getSession);
+  const supabaseSignOut = jest.mocked(supabase.auth.signOut);
+
+  const respond = (status: number, body: unknown) =>
+    fetchMock.mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      text: async () => JSON.stringify(body),
+    });
+
+  beforeAll(() => {
+    process.env.EXPO_PUBLIC_API_URL = "http://localhost:3000";
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    globalThis.FormData = class {
+      append = jest.fn();
+    } as unknown as typeof FormData;
+    jest.spyOn(console, "log").mockImplementation(() => {});
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterAll(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.FormData = originalFormData;
+    jest.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    supabaseSignOut.mockClear();
+    getSession.mockResolvedValue({
+      data: { session: { access_token: "token-abc" } },
+      error: null,
+    } as never);
+  });
+
+  it("envía la cabecera Authorization con el access_token de la sesión", async () => {
+    respond(200, { foods: [], totals: {} });
+
+    await analyzeFood(image);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/food-analysis",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer token-abc" }),
+      }),
+    );
+  });
+
+  it("no añade Authorization si no hay sesión", async () => {
+    getSession.mockResolvedValue({ data: { session: null }, error: null });
+    respond(200, { foods: [], totals: {} });
+
+    await analyzeFood(image);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty("Authorization");
+  });
+
+  it("cierra sesión y avisa de sesión caducada ante un 401", async () => {
+    respond(401, { statusCode: 401, message: "Unauthorized" });
+
+    await expect(analyzeFood(image)).rejects.toThrow(
+      "Sesión caducada, vuelve a entrar",
+    );
+    expect(supabaseSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("no cierra sesión con otros errores", async () => {
+    respond(400, { statusCode: 400, message: "Image is required" });
+
+    await expect(analyzeFood(image)).rejects.toThrow("Image is required");
+    expect(supabaseSignOut).not.toHaveBeenCalled();
   });
 });
